@@ -1,5 +1,6 @@
 import "./globals.css";
 import Navbar from "./components/Navbar";
+import { CartProvider } from "./context/CartContext";
 
 export const metadata = {
   title: "Świat Planszówek",
@@ -10,8 +11,10 @@ export default function RootLayout({ children }) {
   return (
     <html lang="pl">
       <body>
-        <Navbar />
-        {children} 
+        <CartProvider>
+          <Navbar />
+          {children} 
+        </CartProvider>
       </body>
     </html>
   );

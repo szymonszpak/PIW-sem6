@@ -1,11 +1,13 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
 import { db, auth } from "../firebase";
 import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import { useCart } from "./context/CartContext";
 
 export default function Home() {
+  const { dispatch } = useCart();
   const [games, setGames] = useState([]);
 
   const [user, setUser] = useState(null);
@@ -40,16 +42,18 @@ export default function Home() {
     publisher: "Rebel",
     playTime: "Do 30 min",
     image: "",
-    author: ""
+    author: "",
+    description: ""
   };
   const [formData, setFormData] = useState(defaultForm);
+  const descriptionRef = useRef(null);
 
   const fetchGames = async () => {
     try {
       const querySnapshot = await getDocs(collection(db, "games"));
       const gamesList = querySnapshot.docs.map(doc => ({
         ...doc.data(),
-        id: doc.id 
+        id: doc.id
       }));
       setGames(gamesList);
     } catch (error) {
@@ -89,30 +93,32 @@ export default function Home() {
     }
   };
 
-  const filteredGames = games.filter((game) => {
-    const matchSearch = game.title.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchPrice = game.price_pln <= maxPrice;
+  const filteredGames = useMemo(() => {
+    return games.filter((game) => {
+      const matchSearch = game.title.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchPrice = game.price_pln <= maxPrice;
 
-    const matchCategory = selectedCategories.length === 0 || selectedCategories.includes(game.type?.toLowerCase());
-    const matchPublisher = selectedPublishers.length === 0 || selectedPublishers.includes(game.publisher);
+      const matchCategory = selectedCategories.length === 0 || selectedCategories.includes(game.type?.toLowerCase());
+      const matchPublisher = selectedPublishers.length === 0 || selectedPublishers.includes(game.publisher);
 
-    const matchPlayers = selectedPlayers.length === 0 || selectedPlayers.some(p => {
-      if (p === "1 gracz") return game.min_players <= 1;
-      if (p === "2 graczy") return game.min_players <= 2 && game.max_players >= 2;
-      if (p === "3-4 graczy") return game.min_players <= 4 && game.max_players >= 3;
-      if (p === "5+ graczy") return game.max_players >= 5;
-      return false;
+      const matchPlayers = selectedPlayers.length === 0 || selectedPlayers.some(p => {
+        if (p === "1 gracz") return game.min_players <= 1;
+        if (p === "2 graczy") return game.min_players <= 2 && game.max_players >= 2;
+        if (p === "3-4 graczy") return game.min_players <= 4 && game.max_players >= 3;
+        if (p === "5+ graczy") return game.max_players >= 5;
+        return false;
+      });
+
+      const matchTime = selectedTimes.length === 0 || selectedTimes.some(t => {
+        if (t === "Do 30 min") return game.avg_play_time_minutes <= 30;
+        if (t === "Ponad 30 min") return game.avg_play_time_minutes > 30;
+        if (t === "Ponad 60 min") return game.avg_play_time_minutes > 60;
+        return false;
+      });
+
+      return matchSearch && matchPrice && matchCategory && matchPublisher && matchPlayers && matchTime;
     });
-
-    const matchTime = selectedTimes.length === 0 || selectedTimes.some(t => {
-      if (t === "Do 30 min") return game.avg_play_time_minutes <= 30;
-      if (t === "Ponad 30 min") return game.avg_play_time_minutes > 30;
-      if (t === "Ponad 60 min") return game.avg_play_time_minutes > 60;
-      return false;
-    });
-
-    return matchSearch && matchPrice && matchCategory && matchPublisher && matchPlayers && matchTime;
-  });
+  }, [games, searchTerm, maxPrice, selectedCategories, selectedPublishers, selectedPlayers, selectedTimes]);
 
   const totalPages = Math.ceil(filteredGames.length / itemsPerPage);
   const paginatedGames = filteredGames.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -131,7 +137,7 @@ export default function Home() {
     setIsModalOpen(true);
   };
 
-const openEditModal = (gameToEdit) => {
+  const openEditModal = (gameToEdit) => {
     let playersOption = "1 gracz";
     if (gameToEdit.max_players >= 5) {
       playersOption = "5+ graczy";
@@ -157,23 +163,29 @@ const openEditModal = (gameToEdit) => {
       publisher: gameToEdit.publisher || "Rebel",
       playTime: timeOption,
       image: gameToEdit.images?.[0] || "",
-      author: gameToEdit.author
+      author: gameToEdit.author,
+      description: gameToEdit.description ? gameToEdit.description.join("\n") : ""
     });
-    
+
     setIsEditing(true);
     setIsModalOpen(true);
   };
 
-const handleSubmit = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     const currentUserEmail = user ? user.email : "anonim";
+
+    const descriptionArray = descriptionRef.current
+      ? descriptionRef.current.value.split('\n').filter(line => line.trim() !== '')
+      : [];
 
     if (isEditing) {
       await updateDoc(doc(db, "games", formData.id.toString()), {
         title: formData.title,
         price_pln: parseFloat(formData.price),
         publisher: formData.publisher,
-        type: formData.category.toLowerCase()
+        type: formData.category.toLowerCase(),
+        description: descriptionArray
       });
     } else {
       const newId = Date.now().toString();
@@ -186,11 +198,12 @@ const handleSubmit = async (e) => {
         min_players: 1, max_players: 4, avg_play_time_minutes: 60,
         images: formData.image ? [formData.image] : [],
         isSold: false,
-        author: currentUserEmail
+        author: currentUserEmail,
+        description: descriptionArray
       };
       await setDoc(doc(db, "games", newId), newGame);
     }
-    
+
     fetchGames();
     setIsModalOpen(false);
   };
@@ -295,18 +308,19 @@ const handleSubmit = async (e) => {
         <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
           <section className="products-grid">
             {paginatedGames.map((game) => (
-              <article key={game.id} className="product-card" 
-                style={{ 
-                  position: 'relative', 
-                  opacity: game.isSold ? 0.5 : 1, 
-                  filter: game.isSold ? 'grayscale(100%)' : 'none' }}>
+              <article key={game.id} className="product-card"
+                style={{
+                  position: 'relative',
+                  opacity: game.isSold ? 0.5 : 1,
+                  filter: game.isSold ? 'grayscale(100%)' : 'none'
+                }}>
                 {user && user.email === game.author && (
-                <button
-                  onClick={() => openEditModal(game)}
-                  style={{ position: 'absolute', top: '10px', right: '10px', background: 'rgba(255,255,255,0.8)', border: '1px solid #ddd', borderRadius: '5px', padding: '5px 10px', cursor: 'pointer', zIndex: 10, fontSize: '12px' }}
-                >
-                  Edytuj
-                </button>
+                  <button
+                    onClick={() => openEditModal(game)}
+                    style={{ position: 'absolute', top: '10px', right: '10px', background: 'rgba(255,255,255,0.8)', border: '1px solid #ddd', borderRadius: '5px', padding: '5px 10px', cursor: 'pointer', zIndex: 10, fontSize: '12px' }}
+                  >
+                    Edytuj
+                  </button>
 
                 )}
 
@@ -335,13 +349,19 @@ const handleSubmit = async (e) => {
                   <h4>{game.title}</h4>
                   <p className="price">{game.price_pln} zł</p>
                 </Link>
-                <button 
-                  onClick={() => handleBuy(game.id)} 
-                  disabled={game.isSold} 
-                  className="button btnBuy"
-                  style={{ cursor: game.isSold ? 'not-allowed' : 'pointer' }}
+                <button
+                  onClick={() => {
+                    if (!user) {
+                      alert("Musisz być zalogowany, aby dodać grę do koszyka");
+                      return;
+                    }
+                    dispatch({ type: "ADD_ITEM", payload: game });
+                  }}
+                  disabled={game.isSold}
+                  className="button btnCart"
+                  style={{ cursor: game.isSold ? 'not-allowed' : 'pointer', marginTop: '5px', backgroundColor: game.isSold ? '#95a5a6' : '#2ecc71' }}
                 >
-                  {game.isSold ? "Niedostępne" : "Kup Teraz"}
+                  {game.isSold ? "Niedostępne" : "Do koszyka"}
                 </button>
               </article>
             ))}
@@ -403,16 +423,27 @@ const handleSubmit = async (e) => {
                 </select>
               </div>
 
+              <div className="form-group">
+                <label>Opis gry:</label>
+                <textarea
+                  ref={descriptionRef}
+                  defaultValue={formData.description}
+                  rows="4"
+                  placeholder="Wpisz opis gry..."
+                  style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}
+                />
+              </div>
+
               <div style={{ display: "flex", gap: "10px" }}>
                 <button type="submit" className="button btnAcceptAdd" style={{ flex: 1 }}>
                   {isEditing ? "Zapisz zmiany" : "Zapisz i dodaj"}
                 </button>
-                
+
                 {isEditing && user && user.email === formData.author && (
-                  <button 
-                    type="button" 
-                    onClick={handleDelete} 
-                    className="button" 
+                  <button
+                    type="button"
+                    onClick={handleDelete}
+                    className="button"
                     style={{ flex: 1, backgroundColor: "#e74c3c", color: "white" }}
                   >
                     Usuń grę
